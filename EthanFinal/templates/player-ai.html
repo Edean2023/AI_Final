@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Chess AI</title>
+    <link rel="stylesheet" href="/static/css/chessboard-1.0.0.min.css">
+    <script src="https://code.jquery.com/jquery-1.12.4.min.js"></script>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/socket.io/2.2.0/socket.io.js" integrity="sha256-yr4fRk/GU1ehYJPAs8P4JlTgu0Hdsp4ZKrx8bDEDC3I=" crossorigin="anonymous"></script>
+    <script type="text/javascript" src="/static/js/chess.js"></script>
+    <script type="text/javascript" src="/static/js/chessboard-1.0.0.js"></script>
+</head>
+<body>
+    <div style="max-width: 80vw; margin: 0 auto 0 auto; display: flex; align-content: center; flex-direction: column">
+        <h1 style="margin: 10px auto 10px auto">Play Against MiniMax Chess AI</h1>
+        <p style="margin: 10px auto 10px auto">
+            Using the chess board below you are able to play against a chess AI which uses the<br>
+            MiniMax algorithm to make decisions about the best possible move. You may use the buttons<br>
+            below to start a new game. Enjoy testing out this chess AI!<br>
+        </p>
+        <div style="margin: 10px auto 10px auto">
+            <button onclick="window.location = '/random'">New Game as a Random Color</button>
+            <button onclick="window.location = '/white'">New Game as White</button>
+            <button onclick="window.location = '/black'">New Game as Black</button>
+        </div>
+        <br><br><br>
+        <div class="board" style="margin: 0 auto 0 auto; min-width: 50%">
+            <div id="chess_board" style="width: 100%"></div>
+        </div>
+    </div>
+</body>
+<script>
+    var game_data = {{ data|tojson|safe }};
+    let socket = io();
+    let chess_board = null;
+    let game = new Chess(game_data.fen);
+    let whiteSquareGrey = '#a9a9a9';
+    let blackSquareGrey = '#696969';
+    let gameOver = false;
+
+    function removeGreySquares () {
+      $('#chess_board .square-55d63').css('background', '')
+    }
+
+    function greySquare (square) {
+      let $square = $('#chess_board .square-' + square);
+
+      let background = whiteSquareGrey;
+      if ($square.hasClass('black-3c85d')) {
+        background = blackSquareGrey;
+      }
+
+      $square.css('background', background);
+    }
+
+
+    function updateBoard() {
+        //update board using engine fen
+        chess_board.position(game.fen());
+    }
+
+    //when player picks up piece
+    function onDragStart (source, piece, position, orientation) {
+        //snap-back piece whe not players turn
+        if (game_data.player.color !== game.turn()) {
+            return false;
+        }
+
+        //prevent player dragging opposite pieces
+        if (game_data.player.color !== piece[0]) {
+            return false;
+        }
+    }
+
+    //whenever the player tries to make a move
+    function onDrop (source, target, piece, newPos, oldPos, orientation) {
+        removeGreySquares();
+
+        // see if the move is legal
+        let move = game.move({
+            from: source,
+            to: target,
+            promotion: 'q' //always promote to queen for simplicity and training simplicity
+        });
+
+        // prevent the move it is illegal
+        if (move === null) return 'snapback';
+
+        //data to be sent
+        let data = {
+            move: {
+                fen: game.fen(),
+                source: source,
+                target: target,
+                piece: piece
+            }
+        };
+
+        //send the server info about the client making a move
+        socket.emit("move", data);
+    }
+
+    //prevent visual bugs
+    let onSnapEnd = function() {
+        //update board
+        updateBoard();
+    };
+
+    function onMouseoverSquare (square, piece) {
+      // get list of possible moves
+      let moves = game.moves({
+        square: square,
+        verbose: true
+      });
+
+      // exit if there are no moves available
+      if (moves.length === 0) return;
+
+      // highlight square
+      greySquare(square);
+
+      // highlight the possible moves
+      for (let i = 0; i < moves.length; i++) {
+        greySquare(moves[i].to)
+      }
+    }
+
+    //remove highlights
+    function onMouseoutSquare (square, piece) {
+      removeGreySquares();
+    }
+
+
+    let config = {
+        position: game_data.fen,
+        draggable: true,
+        pieceTheme: '../../static/img/chesspieces/wikipedia/{piece}.png',
+        moveSpeed: 'fast',
+        onDragStart: onDragStart,
+        onDrop: onDrop,
+        onSnapEnd: onSnapEnd,
+        onMouseoverSquare: onMouseoverSquare,
+        onMouseoutSquare: onMouseoutSquare
+    };
+
+    function check_state(data) {
+        if (gameOver) {
+            return;
+        }
+
+        //set game over
+        if (data === "none") {
+            return
+        } else {
+            gameOver = true;
+        }
+
+        //if there is a checkmate
+        if (data === "checkmate") {
+            if (game.turn() === "b") {
+                alert("Checkmate: White has won the game!");
+            } else {
+                alert("Checkmate: Black has won the game!");
+            }
+        }
+        //in the case of a draw
+        else if (data === "stalemate" || data === "insufficient_material" || data === "fivefold" || data === "stalemate" || data === "fifty_moves" || data === "seventyfive_moves") {
+            let reason = "";
+
+            //give the reason for the draw
+            if (data === "stalemate") {
+                reason = "a stalemate";
+            }
+            else if (data === "insufficient_material") {
+                reason = "insufficient material"
+            }
+            else if (data === "threefold") {
+                reason = "threefold repetition"
+            }
+            else if (data === "fivefold") {
+                reason = "fivefold repetition"
+            }
+            else if (data === "fifty_moves") {
+                reason = "the fifty move rule"
+            }
+            else if (data === "seventyfive_moves") {
+                reason = "the seventyfive move rule"
+            }
+
+            alert("Draw: The game has been drawn because of " + reason + ".");
+        }
+        else {
+            //do nothing
+        }
+    }
+
+    //create board
+    chess_board = Chessboard('chess_board', config);
+
+    //flip the board if the player is black
+    if(game_data.player.color === "b") {
+        chess_board.flip();
+    }
+
+    //on connection setup
+    socket.on('connect', function(){});
+
+    //update fen
+    socket.on('fen', (data) => {
+        //update engine
+        game.load(data);
+
+        //update board
+        setTimeout(function(){
+            updateBoard();
+
+            //get AI move if it is the AI's turn
+            if(game_data.ai.color === game.turn()) {
+                socket.emit("ai_move");
+            }
+        }, 100);
+    });
+
+    //update state
+    socket.on('state', (data) => {
+        setTimeout(() => {
+            check_state(data);
+        }, 100);
+    });
+
+    //onload setup
+    $(window).load(function(){
+        if(game_data.ai.color === game.turn()) {
+            setTimeout(() => {
+                socket.emit("ai_move");
+            }, 50);
+        }
+
+        //get the fen if no update was returned
+        setInterval(() => {
+            socket.emit('get')
+        }, 5000)
+
+        //set interval
+        setInterval(() => {
+            if(game_data.ai.color === game.turn()) {
+                socket.emit("ai_move");
+            }
+        }, 1000)
+    });
+
+    //handle screen size changes
+    jQuery(function($){
+      let windowWidth = $(window).width();
+      let windowHeight = $(window).height();
+
+      $(window).resize(function() {
+        if(windowWidth !== $(window).width() || windowHeight !== $(window).height()) {
+          location.reload();
+        }
+      });
+    });
+</script>
+</html>
